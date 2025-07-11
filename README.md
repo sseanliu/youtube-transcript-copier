@@ -8,6 +8,14 @@ A Chrome extension that adds a button to YouTube video pages to easily copy the 
 - One-click to copy the entire video transcript.
 - Automatically opens the transcript if it's not already visible.
 
+## How to install
+
+1. Clone this repository to your local machine.
+2. Open Google Chrome and navigate to `chrome://extensions`.
+3. Enable "Developer mode" by clicking the toggle switch at the top right corner.
+4. Click the "Load unpacked" button.
+5. Select the directory where you cloned this repository.
+
 ## How to use
 
 1. Go to a YouTube video page.
