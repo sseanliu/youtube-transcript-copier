@@ -168,10 +168,8 @@ function openTranscript() {
     });
 }
 
-const observer = new MutationObserver((mutations, obs) => {
-    if (addCopyButton()) {
-        obs.disconnect(); // Stop observing once the button is added.
-    }
+const observer = new MutationObserver(() => {
+    addCopyButton();
 });
 
 observer.observe(document.body, {
