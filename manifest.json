@@ -1,0 +1,13 @@
+{
+  "manifest_version": 3,
+  "name": "YouTube Transcript Copier",
+  "version": "1.0",
+  "description": "Copies YouTube video transcripts to the clipboard with a single click.",
+  "permissions": ["activeTab", "scripting", "clipboardWrite"],
+  "content_scripts": [
+    {
+      "matches": ["https://www.youtube.com/watch?v=*"],
+      "js": ["content.js"]
+    }
+  ]
+} 
