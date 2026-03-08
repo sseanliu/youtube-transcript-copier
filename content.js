@@ -104,6 +104,13 @@ function waitForElement(selector, timeout = 3000) {
     });
 }
 
+const EXCLUDED_TRANSCRIPT_TEXTS = [
+    'sync to video time',
+    'follow along',
+    'search in video',
+    'search transcript',
+];
+
 async function getTranscriptText() {
     const segments = findTranscriptSegments();
 
@@ -114,7 +121,9 @@ async function getTranscriptText() {
     let transcript = '';
     segments.forEach(segment => {
         const text = segment.textContent.trim();
-        if (text) transcript += text + ' ';
+        if (text && !EXCLUDED_TRANSCRIPT_TEXTS.includes(text.toLowerCase())) {
+            transcript += text + ' ';
+        }
     });
     return transcript.trim();
 }
