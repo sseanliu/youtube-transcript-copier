@@ -79,26 +79,60 @@ function getVideoId() {
   return url.searchParams.get('v');
 }
 
+// Extract a JSON object starting at a given index using brace counting
+function extractJsonObject(text, startIndex) {
+  let depth = 0;
+  let inString = false;
+  let escape = false;
+  for (let i = startIndex; i < text.length; i++) {
+    const ch = text[i];
+    if (escape) { escape = false; continue; }
+    if (ch === '\\' && inString) { escape = true; continue; }
+    if (ch === '"') { inString = !inString; continue; }
+    if (inString) continue;
+    if (ch === '{') depth++;
+    else if (ch === '}') {
+      depth--;
+      if (depth === 0) return text.substring(startIndex, i + 1);
+    }
+  }
+  return null;
+}
+
+function parsePlayerResponseFromText(text) {
+  const marker = 'ytInitialPlayerResponse';
+  const idx = text.indexOf(marker);
+  if (idx === -1) return null;
+
+  // Find the opening brace after the marker
+  const braceIdx = text.indexOf('{', idx + marker.length);
+  if (braceIdx === -1) return null;
+
+  const jsonStr = extractJsonObject(text, braceIdx);
+  if (!jsonStr) return null;
+
+  try {
+    return JSON.parse(jsonStr);
+  } catch (e) {
+    console.warn("[Transcript Copier] Failed to parse ytInitialPlayerResponse JSON:", e);
+    return null;
+  }
+}
+
 // Step 1: Get caption track URLs from the page's embedded ytInitialPlayerResponse
 async function getCaptionTracks(videoId) {
   // Try to extract from page HTML script tags
   const scripts = document.querySelectorAll('script');
   for (const script of scripts) {
     const text = script.textContent;
-    if (!text) continue;
+    if (!text || !text.includes('ytInitialPlayerResponse')) continue;
 
-    // Look for ytInitialPlayerResponse assignment
-    const match = text.match(/ytInitialPlayerResponse\s*=\s*(\{.+?\});/s);
-    if (match) {
-      try {
-        const playerResponse = JSON.parse(match[1]);
-        const tracks = playerResponse.captions?.playerCaptionsTracklistRenderer?.captionTracks;
-        if (tracks && tracks.length > 0) {
-          console.log("[Transcript Copier] Found caption tracks from ytInitialPlayerResponse");
-          return tracks;
-        }
-      } catch (e) {
-        console.warn("[Transcript Copier] Failed to parse ytInitialPlayerResponse:", e);
+    const playerResponse = parsePlayerResponseFromText(text);
+    if (playerResponse) {
+      const tracks = playerResponse.captions?.playerCaptionsTracklistRenderer?.captionTracks;
+      if (tracks && tracks.length > 0) {
+        console.log("[Transcript Copier] Found caption tracks from ytInitialPlayerResponse");
+        return tracks;
       }
     }
   }
@@ -112,17 +146,12 @@ async function getCaptionTracks(videoId) {
     throw new Error(`Failed to fetch video page: HTTP ${response.status}`);
   }
   const html = await response.text();
-  const htmlMatch = html.match(/ytInitialPlayerResponse\s*=\s*(\{.+?\});/s);
-  if (htmlMatch) {
-    try {
-      const playerResponse = JSON.parse(htmlMatch[1]);
-      const tracks = playerResponse.captions?.playerCaptionsTracklistRenderer?.captionTracks;
-      if (tracks && tracks.length > 0) {
-        console.log("[Transcript Copier] Found caption tracks from fetched page HTML");
-        return tracks;
-      }
-    } catch (e) {
-      console.warn("[Transcript Copier] Failed to parse fetched ytInitialPlayerResponse:", e);
+  const playerResponse = parsePlayerResponseFromText(html);
+  if (playerResponse) {
+    const tracks = playerResponse.captions?.playerCaptionsTracklistRenderer?.captionTracks;
+    if (tracks && tracks.length > 0) {
+      console.log("[Transcript Copier] Found caption tracks from fetched page HTML");
+      return tracks;
     }
   }
 
