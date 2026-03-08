@@ -105,47 +105,43 @@ function waitForElement(selector, timeout = 3000) {
 }
 
 async function getTranscriptText() {
-    // Try new YouTube DOM first: #segments-container with .segment-text
-    let segments = document.querySelectorAll('#segments-container .segment-text');
+    const segments = findTranscriptSegments();
 
-    // Fallback: old YouTube DOM with ytd-transcript-segment-renderer
-    if (segments.length === 0) {
-        const oldSegments = document.querySelectorAll('ytd-transcript-segment-renderer');
-        if (oldSegments.length > 0) {
-            let transcript = '';
-            oldSegments.forEach(segment => {
-                const textElement = segment.querySelector('.segment-text');
-                if (textElement) {
-                    transcript += textElement.textContent.trim() + ' ';
-                }
-            });
-            return transcript.trim();
-        }
-    }
-
-    // Fallback: yt-formatted-string inside segments-container
-    if (segments.length === 0) {
-        segments = document.querySelectorAll('#segments-container yt-formatted-string');
-    }
-
-    if (segments.length === 0) {
+    if (!segments || segments.length === 0) {
         throw new Error("Transcript panel opened, but no text segments were found.");
     }
 
     let transcript = '';
     segments.forEach(segment => {
-        transcript += segment.textContent.trim() + ' ';
+        const text = segment.textContent.trim();
+        if (text) transcript += text + ' ';
     });
     return transcript.trim();
 }
 
+// All known transcript segment selectors across YouTube versions
+const TRANSCRIPT_SELECTORS = [
+    // Mar 2026: engagement-panel-searchable-transcript with .segment-text
+    'ytd-engagement-panel-section-list-renderer[target-id="engagement-panel-searchable-transcript"] .segment-text',
+    // Feb 2026: PAmodern_transcript_view with yt-core-attributed-string
+    'ytd-engagement-panel-section-list-renderer[target-id="PAmodern_transcript_view"] span.yt-core-attributed-string',
+    // Generic fallbacks
+    '#segments-container .segment-text',
+    '#segments-container yt-formatted-string',
+    // Old YouTube DOM
+    'ytd-transcript-segment-renderer .segment-text',
+];
+
+function findTranscriptSegments() {
+    for (const selector of TRANSCRIPT_SELECTORS) {
+        const segments = document.querySelectorAll(selector);
+        if (segments.length > 0) return segments;
+    }
+    return null;
+}
+
 function isTranscriptLoaded() {
-    // Check new YouTube DOM
-    if (document.querySelector('#segments-container .segment-text')) return true;
-    if (document.querySelector('#segments-container yt-formatted-string')) return true;
-    // Check old YouTube DOM
-    if (document.querySelector('ytd-transcript-segment-renderer')) return true;
-    return false;
+    return findTranscriptSegments() !== null;
 }
 
 function waitForTranscript(timeout = 5000) {
