@@ -137,37 +137,58 @@ async function openTranscriptPanel() {
   return panel;
 }
 
-// Wait for transcript-segment-view-model elements to appear
-function waitForSegments(panel, timeout = 8000) {
-  return new Promise((resolve, reject) => {
-    const check = () => {
-      // New YouTube uses transcript-segment-view-model
-      let segments = panel.querySelectorAll('transcript-segment-view-model');
-      if (segments.length > 0) return segments;
-      // Fallback: old selector
-      segments = panel.querySelectorAll('ytd-transcript-segment-renderer');
-      if (segments.length > 0) return segments;
-      return null;
-    };
+// Check for transcript segments in panel or document
+function findSegments(panel) {
+  // New YouTube uses transcript-segment-view-model
+  let segments = panel.querySelectorAll('transcript-segment-view-model');
+  if (segments.length > 0) return segments;
+  // Try document-wide
+  segments = document.querySelectorAll('transcript-segment-view-model');
+  if (segments.length > 0) return segments;
+  // Fallback: old selector
+  segments = panel.querySelectorAll('ytd-transcript-segment-renderer');
+  if (segments.length > 0) return segments;
+  segments = document.querySelectorAll('ytd-transcript-segment-renderer');
+  if (segments.length > 0) return segments;
+  return null;
+}
 
-    const existing = check();
+// Wait for transcript segments to appear with polling fallback
+function waitForSegments(panel, timeout = 20000) {
+  return new Promise((resolve, reject) => {
+    const existing = findSegments(panel);
     if (existing) {
       resolve(existing);
       return;
     }
 
+    // Use both MutationObserver and polling for reliability
     const observer = new MutationObserver(() => {
-      const found = check();
+      const found = findSegments(panel);
       if (found) {
         observer.disconnect();
+        clearInterval(pollInterval);
+        clearTimeout(timer);
         resolve(found);
       }
     });
 
-    observer.observe(panel, { childList: true, subtree: true });
+    observer.observe(document.body, { childList: true, subtree: true });
 
-    setTimeout(() => {
+    // Poll every 500ms as backup (some elements render without triggering observer)
+    const pollInterval = setInterval(() => {
+      const found = findSegments(panel);
+      if (found) {
+        observer.disconnect();
+        clearInterval(pollInterval);
+        clearTimeout(timer);
+        resolve(found);
+      }
+    }, 500);
+
+    const timer = setTimeout(() => {
       observer.disconnect();
+      clearInterval(pollInterval);
       reject(new Error("Timed out waiting for transcript segments to load."));
     }, timeout);
   });
@@ -175,10 +196,11 @@ function waitForSegments(panel, timeout = 8000) {
 
 async function fetchTranscript() {
   const panel = await openTranscriptPanel();
+  console.log("[Transcript Copier] Panel found, waiting for segments...");
 
-  // Wait for segments to render
-  await new Promise(r => setTimeout(r, 1000));
-  const segments = await waitForSegments(panel, 8000);
+  // Wait for segments to render (longer wait for long videos)
+  await new Promise(r => setTimeout(r, 2000));
+  const segments = await waitForSegments(panel, 20000);
 
   console.log("[Transcript Copier] Found", segments.length, "segments");
 
