@@ -79,34 +79,54 @@ function getVideoId() {
   return url.searchParams.get('v');
 }
 
-// Step 1: Get caption track URLs from YouTube's player endpoint
+// Step 1: Get caption track URLs from the page's embedded ytInitialPlayerResponse
 async function getCaptionTracks(videoId) {
-  const response = await fetch('https://www.youtube.com/youtubei/v1/player?prettyPrint=false', {
-    method: 'POST',
-    headers: { 'Content-Type': 'application/json' },
-    body: JSON.stringify({
-      context: {
-        client: {
-          clientName: 'WEB',
-          clientVersion: '2.20260306.01.00',
+  // Try to extract from page HTML script tags
+  const scripts = document.querySelectorAll('script');
+  for (const script of scripts) {
+    const text = script.textContent;
+    if (!text) continue;
+
+    // Look for ytInitialPlayerResponse assignment
+    const match = text.match(/ytInitialPlayerResponse\s*=\s*(\{.+?\});/s);
+    if (match) {
+      try {
+        const playerResponse = JSON.parse(match[1]);
+        const tracks = playerResponse.captions?.playerCaptionsTracklistRenderer?.captionTracks;
+        if (tracks && tracks.length > 0) {
+          console.log("[Transcript Copier] Found caption tracks from ytInitialPlayerResponse");
+          return tracks;
         }
-      },
-      videoId: videoId,
-    }),
+      } catch (e) {
+        console.warn("[Transcript Copier] Failed to parse ytInitialPlayerResponse:", e);
+      }
+    }
+  }
+
+  // Fallback: fetch the watch page HTML and parse from there
+  console.log("[Transcript Copier] ytInitialPlayerResponse not found in DOM, fetching page...");
+  const response = await fetch(`https://www.youtube.com/watch?v=${videoId}`, {
+    credentials: 'include',
   });
-
   if (!response.ok) {
-    throw new Error(`Player API returned HTTP ${response.status}`);
+    throw new Error(`Failed to fetch video page: HTTP ${response.status}`);
+  }
+  const html = await response.text();
+  const htmlMatch = html.match(/ytInitialPlayerResponse\s*=\s*(\{.+?\});/s);
+  if (htmlMatch) {
+    try {
+      const playerResponse = JSON.parse(htmlMatch[1]);
+      const tracks = playerResponse.captions?.playerCaptionsTracklistRenderer?.captionTracks;
+      if (tracks && tracks.length > 0) {
+        console.log("[Transcript Copier] Found caption tracks from fetched page HTML");
+        return tracks;
+      }
+    } catch (e) {
+      console.warn("[Transcript Copier] Failed to parse fetched ytInitialPlayerResponse:", e);
+    }
   }
 
-  const data = await response.json();
-  const tracks = data.captions?.playerCaptionsTracklistRenderer?.captionTracks;
-
-  if (!tracks || tracks.length === 0) {
-    throw new Error("This video does not have captions/transcript available.");
-  }
-
-  return tracks;
+  throw new Error("This video does not have captions/transcript available.");
 }
 
 // Step 2: Fetch the actual caption text from a track URL
