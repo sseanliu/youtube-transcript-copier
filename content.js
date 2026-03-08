@@ -164,14 +164,16 @@ async function fetchCaptionTrack(baseUrl) {
   const separator = baseUrl.includes('?') ? '&' : '?';
   const url = baseUrl + separator + 'fmt=json3';
 
-  console.log("[Transcript Copier] Fetching caption track:", url.substring(0, 100) + "...");
+  console.log("[Transcript Copier] Fetching caption track:", url.substring(0, 150) + "...");
 
-  const response = await fetch(url);
+  const response = await fetch(url, { credentials: 'include' });
+  console.log("[Transcript Copier] Caption response status:", response.status, "type:", response.type);
   if (!response.ok) {
     throw new Error(`Caption track returned HTTP ${response.status}`);
   }
 
   const text = await response.text();
+  console.log("[Transcript Copier] Caption response length:", text.length, "first 200 chars:", text.substring(0, 200));
   if (!text || text.length === 0) {
     throw new Error("Caption track response was empty.");
   }
