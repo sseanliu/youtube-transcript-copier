@@ -1,5 +1,5 @@
-// This script will be injected into YouTube video pages.
-// It will add a "Copy Transcript" button and fetch transcripts via YouTube's innertube API.
+// YouTube Transcript Copier - DOM-based approach
+// Clicks "Show transcript" button and scrapes text from the transcript panel.
 
 function createCopyButton() {
   const button = document.createElement("button");
@@ -74,125 +74,184 @@ async function onCopyTranscriptClick() {
   }
 }
 
-function getVideoId() {
-  const url = new URL(window.location.href);
-  return url.searchParams.get('v');
-}
-
-// Build protobuf params for get_transcript API
-function buildTranscriptParams(videoId) {
-  const encoder = new TextEncoder();
-  const videoIdBytes = encoder.encode(videoId);
-
-  // Protobuf: outer field 1 (message) containing inner field 1 (string) = videoId
-  // Inner: 0x0A <videoId.length> <videoId bytes>
-  // Outer: 0x0A <inner.length> <inner bytes>
-  const innerLen = 1 + 1 + videoIdBytes.length;
-  const bytes = new Uint8Array([
-    0x0A, innerLen,
-    0x0A, videoIdBytes.length,
-    ...videoIdBytes
-  ]);
-
-  return btoa(String.fromCharCode(...bytes));
-}
-
-// Fetch transcript using YouTube's get_transcript innertube API
-async function fetchTranscript() {
-  const videoId = getVideoId();
-  if (!videoId) throw new Error("Could not determine video ID.");
-
-  console.log("[Transcript Copier] Fetching transcript for video:", videoId);
-
-  const params = buildTranscriptParams(videoId);
-  console.log("[Transcript Copier] Params:", params);
-
-  const response = await fetch('https://www.youtube.com/youtubei/v1/get_transcript', {
-    method: 'POST',
-    headers: { 'Content-Type': 'application/json' },
-    credentials: 'include',
-    body: JSON.stringify({
-      context: {
-        client: {
-          clientName: 'WEB',
-          clientVersion: '2.20260306.01.00',
-        }
-      },
-      params: params,
-    }),
-  });
-
-  console.log("[Transcript Copier] Response status:", response.status);
-
-  if (!response.ok) {
-    const errorText = await response.text();
-    console.error("[Transcript Copier] Error response:", errorText.substring(0, 500));
-    throw new Error(`Transcript API returned HTTP ${response.status}`);
-  }
-
-  const data = await response.json();
-  console.log("[Transcript Copier] Response keys:", Object.keys(data));
-
-  // Extract transcript segments from the response
-  const actions = data.actions;
-  if (!actions || actions.length === 0) {
-    throw new Error("No transcript data in response.");
-  }
-
-  // Navigate the response structure to find cue groups
-  let cueGroups = null;
-  for (const action of actions) {
-    const panel = action.updateEngagementPanelAction?.content?.transcriptRenderer;
-    if (panel) {
-      cueGroups = panel.body?.transcriptBodyRenderer?.cueGroups;
-      break;
+// Wait for an element to appear in the DOM
+function waitForElement(selector, timeout = 5000) {
+  return new Promise((resolve, reject) => {
+    const existing = document.querySelector(selector);
+    if (existing) {
+      resolve(existing);
+      return;
     }
+
+    const observer = new MutationObserver(() => {
+      const el = document.querySelector(selector);
+      if (el) {
+        observer.disconnect();
+        resolve(el);
+      }
+    });
+
+    observer.observe(document.body, { childList: true, subtree: true });
+
+    setTimeout(() => {
+      observer.disconnect();
+      reject(new Error(`Timed out waiting for: ${selector}`));
+    }, timeout);
+  });
+}
+
+// Wait for transcript segments to populate
+function waitForSegments(container, timeout = 5000) {
+  return new Promise((resolve, reject) => {
+    const check = () => {
+      const segments = container.querySelectorAll('ytd-transcript-segment-renderer');
+      if (segments.length > 0) return segments;
+      return null;
+    };
+
+    const existing = check();
+    if (existing) {
+      resolve(existing);
+      return;
+    }
+
+    const observer = new MutationObserver(() => {
+      const found = check();
+      if (found) {
+        observer.disconnect();
+        resolve(found);
+      }
+    });
+
+    observer.observe(container, { childList: true, subtree: true });
+
+    setTimeout(() => {
+      observer.disconnect();
+      reject(new Error("Timed out waiting for transcript segments to load."));
+    }, timeout);
+  });
+}
+
+// Find and click the "Show transcript" button
+async function openTranscriptPanel() {
+  // Check if transcript panel is already open
+  const existingPanel = document.querySelector('ytd-engagement-panel-section-list-renderer[target-id="engagement-panel-searchable-transcript"]');
+  if (existingPanel && existingPanel.getAttribute('visibility') === 'ENGAGEMENT_PANEL_VISIBILITY_EXPANDED') {
+    console.log("[Transcript Copier] Transcript panel already open");
+    return existingPanel;
   }
 
-  if (!cueGroups || cueGroups.length === 0) {
-    // Try alternative response structure
-    for (const action of actions) {
-      const searchPanel = action.updateEngagementPanelAction?.content?.transcriptSearchPanelRenderer;
-      if (searchPanel) {
-        cueGroups = searchPanel.body?.transcriptSegmentListRenderer?.initialSegments;
+  // Try to find "Show transcript" button directly
+  let transcriptButton = document.querySelector('button[aria-label="Show transcript"]');
+
+  // If not found, try expanding the description first
+  if (!transcriptButton) {
+    console.log("[Transcript Copier] Looking for transcript button in description...");
+
+    // Try clicking "...more" to expand description
+    const moreButton = document.querySelector('tp-yt-paper-button#expand')
+      || document.querySelector('#expand')
+      || document.querySelector('ytd-text-inline-expander #expand');
+    if (moreButton) {
+      console.log("[Transcript Copier] Expanding description...");
+      moreButton.click();
+      await new Promise(r => setTimeout(r, 500));
+    }
+
+    transcriptButton = document.querySelector('button[aria-label="Show transcript"]');
+  }
+
+  // Also try looking for the button with different selectors
+  if (!transcriptButton) {
+    // Search by text content
+    const allButtons = document.querySelectorAll('button, ytd-button-renderer a, ytd-button-renderer button');
+    for (const btn of allButtons) {
+      const text = btn.textContent?.trim().toLowerCase();
+      if (text === 'show transcript' || text === 'transcript') {
+        transcriptButton = btn;
         break;
       }
     }
   }
 
-  if (!cueGroups || cueGroups.length === 0) {
-    console.log("[Transcript Copier] Full response:", JSON.stringify(data).substring(0, 2000));
-    throw new Error("Could not find transcript segments in response.");
+  if (!transcriptButton) {
+    throw new Error("Could not find 'Show transcript' button. This video may not have a transcript.");
   }
 
-  // Extract text from cue groups
+  console.log("[Transcript Copier] Clicking 'Show transcript' button");
+  transcriptButton.click();
+
+  // Wait for the transcript panel to appear
+  const panel = await waitForElement(
+    'ytd-engagement-panel-section-list-renderer[target-id="engagement-panel-searchable-transcript"]',
+    5000
+  ).catch(() => {
+    // Try alternative target-id
+    return waitForElement(
+      'ytd-engagement-panel-section-list-renderer[target-id="engagement-panel-transcript"]',
+      3000
+    );
+  });
+
+  return panel;
+}
+
+async function fetchTranscript() {
+  console.log("[Transcript Copier] Opening transcript panel...");
+  const panel = await openTranscriptPanel();
+
+  console.log("[Transcript Copier] Waiting for segments to load...");
+
+  // Wait a moment for content to render
+  await new Promise(r => setTimeout(r, 1000));
+
+  // Find the segments container
+  const segmentsContainer = panel.querySelector('#segments-container')
+    || panel.querySelector('ytd-transcript-segment-list-renderer')
+    || panel;
+
+  const segments = await waitForSegments(segmentsContainer, 8000);
+
+  console.log("[Transcript Copier] Found", segments.length, "segments");
+
+  // Extract text from segments
   let transcript = '';
-  for (const group of cueGroups) {
-    const cues = group.transcriptCueGroupRenderer?.cues;
-    if (cues) {
-      for (const cue of cues) {
-        const text = cue.transcriptCueRenderer?.cue?.simpleText;
-        if (text && text.trim()) {
-          transcript += text.replace(/\n/g, ' ').trim() + ' ';
-        }
+  for (const segment of segments) {
+    // Try multiple selectors for the text content
+    const textEl = segment.querySelector('.segment-text')
+      || segment.querySelector('yt-formatted-string.segment-text')
+      || segment.querySelector('[class*="segment-text"]');
+
+    if (textEl) {
+      const text = textEl.textContent?.trim();
+      if (text) {
+        transcript += text + ' ';
       }
     } else {
-      // Alternative: transcriptSegmentRenderer
-      const segText = group.transcriptSegmentRenderer?.snippet?.runs;
-      if (segText) {
-        const text = segText.map(r => r.text || '').join('');
-        if (text.trim()) {
-          transcript += text.replace(/\n/g, ' ').trim() + ' ';
-        }
+      // Fallback: get all text from the segment, excluding timestamp
+      const timestampEl = segment.querySelector('.segment-timestamp');
+      const fullText = segment.textContent?.trim();
+      const timestampText = timestampEl?.textContent?.trim() || '';
+      const text = fullText?.replace(timestampText, '').trim();
+      if (text) {
+        transcript += text + ' ';
       }
     }
   }
 
   if (!transcript.trim()) {
-    throw new Error("Transcript was empty.");
+    throw new Error("Transcript was empty after scraping segments.");
   }
 
   console.log("[Transcript Copier] Got transcript, length:", transcript.length);
+
+  // Close the transcript panel to clean up
+  const closeButton = panel.querySelector('#visibility-button button')
+    || panel.querySelector('button[aria-label="Close transcript"]');
+  if (closeButton) {
+    closeButton.click();
+  }
+
   return transcript.trim();
 }
 
