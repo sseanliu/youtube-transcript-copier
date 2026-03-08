@@ -105,25 +105,74 @@ function waitForElement(selector, timeout = 3000) {
 }
 
 async function getTranscriptText() {
-    const segments = document.querySelectorAll('ytd-transcript-segment-renderer');
+    // Try new YouTube DOM first: #segments-container with .segment-text
+    let segments = document.querySelectorAll('#segments-container .segment-text');
+
+    // Fallback: old YouTube DOM with ytd-transcript-segment-renderer
+    if (segments.length === 0) {
+        const oldSegments = document.querySelectorAll('ytd-transcript-segment-renderer');
+        if (oldSegments.length > 0) {
+            let transcript = '';
+            oldSegments.forEach(segment => {
+                const textElement = segment.querySelector('.segment-text');
+                if (textElement) {
+                    transcript += textElement.textContent.trim() + ' ';
+                }
+            });
+            return transcript.trim();
+        }
+    }
+
+    // Fallback: yt-formatted-string inside segments-container
+    if (segments.length === 0) {
+        segments = document.querySelectorAll('#segments-container yt-formatted-string');
+    }
+
     if (segments.length === 0) {
         throw new Error("Transcript panel opened, but no text segments were found.");
     }
 
     let transcript = '';
     segments.forEach(segment => {
-        const textElement = segment.querySelector('.segment-text');
-        if (textElement) {
-            transcript += textElement.textContent.trim() + ' ';
-        }
+        transcript += segment.textContent.trim() + ' ';
     });
     return transcript.trim();
+}
+
+function isTranscriptLoaded() {
+    // Check new YouTube DOM
+    if (document.querySelector('#segments-container .segment-text')) return true;
+    if (document.querySelector('#segments-container yt-formatted-string')) return true;
+    // Check old YouTube DOM
+    if (document.querySelector('ytd-transcript-segment-renderer')) return true;
+    return false;
+}
+
+function waitForTranscript(timeout = 5000) {
+    return new Promise((resolve, reject) => {
+        if (isTranscriptLoaded()) return resolve();
+
+        const observer = new MutationObserver(() => {
+            if (isTranscriptLoaded()) {
+                clearTimeout(timeoutId);
+                observer.disconnect();
+                resolve();
+            }
+        });
+
+        const timeoutId = setTimeout(() => {
+            observer.disconnect();
+            reject(new Error("Transcript content did not load."));
+        }, timeout);
+
+        observer.observe(document.body, { childList: true, subtree: true });
+    });
 }
 
 function openTranscript() {
     return new Promise(async (resolve, reject) => {
         // If transcript content is already rendered, we're good.
-        if (document.querySelector('ytd-transcript-segment-renderer')) {
+        if (isTranscriptLoaded()) {
             return resolve();
         }
 
@@ -139,7 +188,7 @@ function openTranscript() {
         if (directTranscriptButton) {
             directTranscriptButton.click();
             try {
-                await waitForElement('ytd-transcript-segment-renderer', 5000);
+                await waitForTranscript(5000);
                 return resolve();
             } catch (error) {
                 return reject(new Error("Clicked 'Show transcript', but content did not load."));
@@ -156,14 +205,14 @@ function openTranscript() {
                                                   .find(el => el.textContent.trim() === 'Show transcript');
                 if (transcriptMenuItem) {
                     transcriptMenuItem.click();
-                    await waitForElement('ytd-transcript-segment-renderer', 5000);
+                    await waitForTranscript(5000);
                     return resolve();
                 }
             } catch (error) {
                  return reject(new Error("Could not load transcript from the 'More actions' menu."));
             }
         }
-        
+
         reject(new Error("Could not find a 'Show transcript' button on the page."));
     });
 }
