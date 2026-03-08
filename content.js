@@ -139,18 +139,48 @@ const TRANSCRIPT_SELECTORS = [
     '#segments-container yt-formatted-string',
     // Old YouTube DOM
     'ytd-transcript-segment-renderer .segment-text',
+    // Broad: any engagement panel with segment-text
+    'ytd-engagement-panel-section-list-renderer .segment-text',
+    // Broad: transcript segment renderers anywhere
+    'ytd-transcript-segment-renderer',
+    // Broad: any segment in transcript body
+    'ytd-transcript-renderer .segment-text',
+    'ytd-transcript-renderer yt-formatted-string.segment-text',
 ];
 
 function findTranscriptSegments() {
     for (const selector of TRANSCRIPT_SELECTORS) {
         const segments = document.querySelectorAll(selector);
-        if (segments.length > 0) return segments;
+        if (segments.length > 0) {
+            console.log('[Transcript Copier] Found segments with selector:', selector, 'count:', segments.length);
+            return segments;
+        }
     }
     return null;
 }
 
 function isTranscriptLoaded() {
     return findTranscriptSegments() !== null;
+}
+
+function debugTranscriptPanel() {
+    // Log all engagement panels and their target-ids
+    const panels = document.querySelectorAll('ytd-engagement-panel-section-list-renderer');
+    console.log('[Transcript Copier] Found', panels.length, 'engagement panels');
+    panels.forEach((panel, i) => {
+        const targetId = panel.getAttribute('target-id');
+        const visibility = panel.getAttribute('visibility');
+        console.log(`[Transcript Copier] Panel ${i}: target-id="${targetId}", visibility="${visibility}"`);
+        if (targetId && targetId.toLowerCase().includes('transcript')) {
+            console.log('[Transcript Copier] Transcript panel innerHTML (first 2000 chars):', panel.innerHTML.substring(0, 2000));
+        }
+    });
+    // Also check for any element with "segment" in class name
+    const segmentEls = document.querySelectorAll('[class*="segment"]');
+    console.log('[Transcript Copier] Elements with "segment" in class:', segmentEls.length);
+    segmentEls.forEach((el, i) => {
+        if (i < 10) console.log(`[Transcript Copier] segment-el ${i}: <${el.tagName.toLowerCase()} class="${el.className}">`, el.textContent.substring(0, 100));
+    });
 }
 
 function waitForTranscript(timeout = 5000) {
@@ -196,7 +226,8 @@ function openTranscript() {
                 await waitForTranscript(5000);
                 return resolve();
             } catch (error) {
-                return reject(new Error("Clicked 'Show transcript', but content did not load."));
+                debugTranscriptPanel();
+                return reject(new Error("Clicked 'Show transcript', but content did not load. Check console for debug info."));
             }
         }
 
