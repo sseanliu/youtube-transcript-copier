@@ -130,25 +130,72 @@ async function getTranscriptText() {
 
 // All known transcript segment selectors across YouTube versions
 const TRANSCRIPT_SELECTORS = [
-    // Mar 2026: engagement-panel-searchable-transcript with .segment-text
+    // Specific panels
     'ytd-engagement-panel-section-list-renderer[target-id="engagement-panel-searchable-transcript"] .segment-text',
-    // Feb 2026: PAmodern_transcript_view with yt-core-attributed-string
     'ytd-engagement-panel-section-list-renderer[target-id="PAmodern_transcript_view"] span.yt-core-attributed-string',
-    // Generic fallbacks
+    // Generic segment selectors
     '#segments-container .segment-text',
     '#segments-container yt-formatted-string',
-    // Old YouTube DOM
     'ytd-transcript-segment-renderer .segment-text',
-    // Broad: any engagement panel with segment-text
-    'ytd-engagement-panel-section-list-renderer .segment-text',
-    // Broad: transcript segment renderers anywhere
     'ytd-transcript-segment-renderer',
-    // Broad: any segment in transcript body
+    // Broad: any engagement panel
+    'ytd-engagement-panel-section-list-renderer .segment-text',
     'ytd-transcript-renderer .segment-text',
-    'ytd-transcript-renderer yt-formatted-string.segment-text',
 ];
 
+// Find transcript text from the currently expanded engagement panel
+function findTranscriptFromExpandedPanel() {
+    const panels = document.querySelectorAll('ytd-engagement-panel-section-list-renderer[visibility="ENGAGEMENT_PANEL_VISIBILITY_EXPANDED"]');
+    for (const panel of panels) {
+        // Check if this panel looks like a transcript (has a "Transcript" title)
+        const titleEl = panel.querySelector('#title-text');
+        if (titleEl && titleEl.textContent.trim().toLowerCase() === 'transcript') {
+            // This is the transcript panel - grab all text content from segments
+            // Try various known selectors within this panel
+            const selectors = [
+                '.segment-text',
+                'yt-formatted-string.segment-text',
+                'ytd-transcript-segment-renderer .segment-text',
+                'ytd-transcript-segment-renderer',
+                '#segments-container .segment-text',
+                '#segments-container yt-formatted-string',
+                'span.yt-core-attributed-string',
+            ];
+            for (const sel of selectors) {
+                const segments = panel.querySelectorAll(sel);
+                if (segments.length > 3) {
+                    console.log('[Transcript Copier] Found segments in expanded panel with selector:', sel, 'count:', segments.length);
+                    return segments;
+                }
+            }
+            // Last resort: look for all yt-formatted-string elements in the panel body
+            const content = panel.querySelector('#content');
+            if (content) {
+                const allFormatted = content.querySelectorAll('yt-formatted-string');
+                if (allFormatted.length > 3) {
+                    console.log('[Transcript Copier] Found segments via yt-formatted-string in expanded panel, count:', allFormatted.length);
+                    return allFormatted;
+                }
+                // Ultra broad: any element that looks like transcript text
+                const allSpans = content.querySelectorAll('span');
+                const textSpans = Array.from(allSpans).filter(s => {
+                    const text = s.textContent.trim();
+                    return text.length > 0 && text.length < 500 && !s.querySelector('*:not(br)');
+                });
+                if (textSpans.length > 3) {
+                    console.log('[Transcript Copier] Found segments via leaf spans in expanded panel, count:', textSpans.length);
+                    return textSpans;
+                }
+            }
+            console.log('[Transcript Copier] Transcript panel found but no segments. innerHTML (2000 chars):', panel.innerHTML.substring(0, 2000));
+            return null;
+        }
+    }
+    return null;
+}
+
 function findTranscriptSegments() {
+    // First try specific selectors
     for (const selector of TRANSCRIPT_SELECTORS) {
         const segments = document.querySelectorAll(selector);
         if (segments.length > 0) {
@@ -156,31 +203,12 @@ function findTranscriptSegments() {
             return segments;
         }
     }
-    return null;
+    // Then try finding from expanded panel
+    return findTranscriptFromExpandedPanel();
 }
 
 function isTranscriptLoaded() {
     return findTranscriptSegments() !== null;
-}
-
-function debugTranscriptPanel() {
-    // Log all engagement panels and their target-ids
-    const panels = document.querySelectorAll('ytd-engagement-panel-section-list-renderer');
-    console.log('[Transcript Copier] Found', panels.length, 'engagement panels');
-    panels.forEach((panel, i) => {
-        const targetId = panel.getAttribute('target-id');
-        const visibility = panel.getAttribute('visibility');
-        console.log(`[Transcript Copier] Panel ${i}: target-id="${targetId}", visibility="${visibility}"`);
-        if (targetId && targetId.toLowerCase().includes('transcript')) {
-            console.log('[Transcript Copier] Transcript panel innerHTML (first 2000 chars):', panel.innerHTML.substring(0, 2000));
-        }
-    });
-    // Also check for any element with "segment" in class name
-    const segmentEls = document.querySelectorAll('[class*="segment"]');
-    console.log('[Transcript Copier] Elements with "segment" in class:', segmentEls.length);
-    segmentEls.forEach((el, i) => {
-        if (i < 10) console.log(`[Transcript Copier] segment-el ${i}: <${el.tagName.toLowerCase()} class="${el.className}">`, el.textContent.substring(0, 100));
-    });
 }
 
 function waitForTranscript(timeout = 5000) {
@@ -223,10 +251,9 @@ function openTranscript() {
         if (directTranscriptButton) {
             directTranscriptButton.click();
             try {
-                await waitForTranscript(5000);
+                await waitForTranscript(10000);
                 return resolve();
             } catch (error) {
-                debugTranscriptPanel();
                 return reject(new Error("Clicked 'Show transcript', but content did not load. Check console for debug info."));
             }
         }
