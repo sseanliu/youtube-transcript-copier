@@ -134,15 +134,20 @@ function waitForSegments(container, timeout = 5000) {
 
 // Find and click the "Show transcript" button
 async function openTranscriptPanel() {
-  // Check if transcript panel is already open
-  const existingPanel = document.querySelector('ytd-engagement-panel-section-list-renderer[target-id="engagement-panel-searchable-transcript"]');
-  if (existingPanel && existingPanel.getAttribute('visibility') === 'ENGAGEMENT_PANEL_VISIBILITY_EXPANDED') {
-    console.log("[Transcript Copier] Transcript panel already open");
-    return existingPanel;
+  // Check if any transcript/engagement panel is already open
+  const allPanels = document.querySelectorAll('ytd-engagement-panel-section-list-renderer');
+  for (const p of allPanels) {
+    const tid = p.getAttribute('target-id') || '';
+    console.log("[Transcript Copier] Found panel with target-id:", tid, "visibility:", p.getAttribute('visibility'));
+    if (tid.includes('transcript') && p.getAttribute('visibility')?.includes('EXPANDED')) {
+      console.log("[Transcript Copier] Transcript panel already open");
+      return p;
+    }
   }
 
   // Try to find "Show transcript" button directly
   let transcriptButton = document.querySelector('button[aria-label="Show transcript"]');
+  console.log("[Transcript Copier] Show transcript button (aria-label):", transcriptButton);
 
   // If not found, try expanding the description first
   if (!transcriptButton) {
@@ -155,10 +160,11 @@ async function openTranscriptPanel() {
     if (moreButton) {
       console.log("[Transcript Copier] Expanding description...");
       moreButton.click();
-      await new Promise(r => setTimeout(r, 500));
+      await new Promise(r => setTimeout(r, 800));
     }
 
     transcriptButton = document.querySelector('button[aria-label="Show transcript"]');
+    console.log("[Transcript Copier] Show transcript button after expand:", transcriptButton);
   }
 
   // Also try looking for the button with different selectors
@@ -167,8 +173,9 @@ async function openTranscriptPanel() {
     const allButtons = document.querySelectorAll('button, ytd-button-renderer a, ytd-button-renderer button');
     for (const btn of allButtons) {
       const text = btn.textContent?.trim().toLowerCase();
-      if (text === 'show transcript' || text === 'transcript') {
+      if (text && (text.includes('show transcript') || text === 'transcript')) {
         transcriptButton = btn;
+        console.log("[Transcript Copier] Found transcript button by text:", text);
         break;
       }
     }
@@ -181,17 +188,37 @@ async function openTranscriptPanel() {
   console.log("[Transcript Copier] Clicking 'Show transcript' button");
   transcriptButton.click();
 
-  // Wait for the transcript panel to appear
-  const panel = await waitForElement(
-    'ytd-engagement-panel-section-list-renderer[target-id="engagement-panel-searchable-transcript"]',
-    5000
-  ).catch(() => {
-    // Try alternative target-id
-    return waitForElement(
-      'ytd-engagement-panel-section-list-renderer[target-id="engagement-panel-transcript"]',
-      3000
-    );
-  });
+  // Wait for any transcript panel to appear
+  await new Promise(r => setTimeout(r, 1500));
+
+  // Find the panel - check all engagement panels for one containing transcript
+  const panelsAfterClick = document.querySelectorAll('ytd-engagement-panel-section-list-renderer');
+  let panel = null;
+  for (const p of panelsAfterClick) {
+    const tid = p.getAttribute('target-id') || '';
+    const vis = p.getAttribute('visibility') || '';
+    console.log("[Transcript Copier] Panel after click - target-id:", tid, "visibility:", vis);
+    if (tid.includes('transcript')) {
+      panel = p;
+      break;
+    }
+  }
+
+  if (!panel) {
+    // Fallback: find any panel that just became visible
+    for (const p of panelsAfterClick) {
+      const vis = p.getAttribute('visibility') || '';
+      if (vis.includes('EXPANDED')) {
+        console.log("[Transcript Copier] Using expanded panel with target-id:", p.getAttribute('target-id'));
+        panel = p;
+        break;
+      }
+    }
+  }
+
+  if (!panel) {
+    throw new Error("Transcript panel did not open after clicking button.");
+  }
 
   return panel;
 }
@@ -201,16 +228,53 @@ async function fetchTranscript() {
   const panel = await openTranscriptPanel();
 
   console.log("[Transcript Copier] Waiting for segments to load...");
+  console.log("[Transcript Copier] Panel innerHTML preview:", panel.innerHTML.substring(0, 500));
 
-  // Wait a moment for content to render
-  await new Promise(r => setTimeout(r, 1000));
+  // Wait for content to render
+  await new Promise(r => setTimeout(r, 2000));
 
-  // Find the segments container
-  const segmentsContainer = panel.querySelector('#segments-container')
-    || panel.querySelector('ytd-transcript-segment-list-renderer')
-    || panel;
+  // Debug: log all child element tag names in the panel
+  const allChildren = panel.querySelectorAll('*');
+  const tagNames = new Set();
+  allChildren.forEach(el => tagNames.add(el.tagName.toLowerCase()));
+  console.log("[Transcript Copier] All tag names in panel:", [...tagNames].join(', '));
 
-  const segments = await waitForSegments(segmentsContainer, 8000);
+  // Try multiple segment selectors
+  const segmentSelectors = [
+    'ytd-transcript-segment-renderer',
+    'yt-transcript-segment-renderer',
+    '[class*="transcript-segment"]',
+    '.segment-text',
+    'ytd-transcript-segment-list-renderer .segment',
+  ];
+
+  let segments = null;
+  for (const sel of segmentSelectors) {
+    const found = panel.querySelectorAll(sel);
+    console.log("[Transcript Copier] Selector", sel, "found:", found.length);
+    if (found.length > 0) {
+      segments = found;
+      break;
+    }
+  }
+
+  // If no segments found, try searching the entire document (panel might be elsewhere)
+  if (!segments || segments.length === 0) {
+    for (const sel of segmentSelectors) {
+      const found = document.querySelectorAll(sel);
+      console.log("[Transcript Copier] Document-wide selector", sel, "found:", found.length);
+      if (found.length > 0) {
+        segments = found;
+        break;
+      }
+    }
+  }
+
+  if (!segments || segments.length === 0) {
+    // Last resort: dump panel content for debugging
+    console.log("[Transcript Copier] Panel full HTML (first 3000 chars):", panel.innerHTML.substring(0, 3000));
+    throw new Error("Could not find transcript segments. Check console for panel HTML.");
+  }
 
   console.log("[Transcript Copier] Found", segments.length, "segments");
 
@@ -220,6 +284,7 @@ async function fetchTranscript() {
     // Try multiple selectors for the text content
     const textEl = segment.querySelector('.segment-text')
       || segment.querySelector('yt-formatted-string.segment-text')
+      || segment.querySelector('yt-formatted-string')
       || segment.querySelector('[class*="segment-text"]');
 
     if (textEl) {
@@ -229,7 +294,8 @@ async function fetchTranscript() {
       }
     } else {
       // Fallback: get all text from the segment, excluding timestamp
-      const timestampEl = segment.querySelector('.segment-timestamp');
+      const timestampEl = segment.querySelector('.segment-timestamp')
+        || segment.querySelector('[class*="timestamp"]');
       const fullText = segment.textContent?.trim();
       const timestampText = timestampEl?.textContent?.trim() || '';
       const text = fullText?.replace(timestampText, '').trim();
