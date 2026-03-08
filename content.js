@@ -204,11 +204,11 @@ async function fetchTranscript() {
 
   console.log("[Transcript Copier] Found", segments.length, "segments");
 
-  // Each segment's textContent is: "<MM:SS><long_timestamp><actual text>"
-  // e.g. "0:3737 secondsThis is the Cortical Labs CL1."
-  // e.g. "1:161 minute, 16 secondsSince launching..."
-  // Strip the short timestamp (0:37) and long timestamp (37 seconds) prefix
-  const timestampPrefix = /^\d+:\d{2}(\d+\s+minutes?,\s*\d+\s+seconds?|\d+\s+seconds?|\d+\s+minutes?)?/;
+  // Each segment's textContent is: "<short_ts><long_ts><actual text>"
+  // Short: "0:37" or "2:33:59" (H:MM:SS for videos over 1hr)
+  // Long: "37 seconds" or "2 hours, 33 minutes, 59 seconds"
+  // They concatenate without spaces, e.g. "2:33:592 hours, 33 minutes, 59 secondsroutine or yoga..."
+  const timestampPrefix = /^\d+:\d{2}(:\d{2})?(\d+\s+hours?,\s*\d+\s+minutes?,\s*\d+\s+seconds?|\d+\s+minutes?,\s*\d+\s+seconds?|\d+\s+seconds?|\d+\s+minutes?|\d+\s+hours?)?/;
 
   let transcript = '';
   for (const segment of segments) {
