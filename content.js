@@ -182,73 +182,26 @@ async function fetchTranscript() {
 
   console.log("[Transcript Copier] Found", segments.length, "segments");
 
-  // Debug: log first segment's inner structure
-  if (segments.length > 0) {
-    const first = segments[0];
-    console.log("[Transcript Copier] First segment tag:", first.tagName);
-    console.log("[Transcript Copier] First segment innerHTML:", first.innerHTML?.substring(0, 500));
-    const children = first.querySelectorAll('*');
-    const childTags = [];
-    children.forEach(c => childTags.push(c.tagName.toLowerCase() + (c.className ? '.' + c.className.split(' ')[0] : '')));
-    console.log("[Transcript Copier] First segment children:", childTags.join(', '));
+  // Regex to strip timestamp patterns
+  const timestampSuffix = /\s*\d+\s+(minutes?|seconds?)(,\s*\d+\s+(minutes?|seconds?))*\s*$/i;
+  const timestampPrefix = /^\s*\d+:\d{2}\s*/;
+
+  function cleanTimestamp(text) {
+    if (!text) return '';
+    return text
+      .replace(timestampPrefix, '')
+      .replace(timestampSuffix, '')
+      .trim();
   }
 
   // Extract text from each segment
   let transcript = '';
-  // Regex to strip timestamp suffixes like "37 seconds", "1 minute, 16 seconds"
-  const timestampSuffix = /\s*\d+\s+(minutes?|seconds?)(,\s*\d+\s+(minutes?|seconds?))*\s*$/;
-
   for (const segment of segments) {
-    // Try to find a dedicated text element (not the timestamp)
-    const textEl = segment.querySelector('.segment-text')
-      || segment.querySelector('yt-formatted-string.segment-text');
-
-    if (textEl) {
-      const text = textEl.textContent?.trim();
-      if (text) {
-        transcript += text + ' ';
-        continue;
-      }
-    }
-
-    // Get all yt-formatted-string elements - one is likely text, another timestamp
-    const formattedStrings = segment.querySelectorAll('yt-formatted-string');
-    if (formattedStrings.length >= 2) {
-      // Usually first is text, second is timestamp - but check
-      for (const fs of formattedStrings) {
-        const t = fs.textContent?.trim();
-        // Skip if it looks like a timestamp
-        if (t && !t.match(/^\d+\s+(minutes?|seconds?)(,\s*\d+\s+(minutes?|seconds?))*$/)) {
-          transcript += t + ' ';
-          break;
-        }
-      }
-      continue;
-    }
-
-    // Single yt-formatted-string or fallback
-    const singleFmt = segment.querySelector('yt-formatted-string');
-    if (singleFmt) {
-      const text = singleFmt.textContent?.trim();
-      if (text) {
-        const cleaned = text.replace(timestampSuffix, '').trim();
-        if (cleaned) {
-          transcript += cleaned + ' ';
-        }
-        continue;
-      }
-    }
-
-    // Last fallback: full text with timestamp stripped
-    const fullText = segment.textContent?.trim();
-    if (fullText) {
-      const cleaned = fullText
-        .replace(/^\d+:\d{2}\s*/, '')
-        .replace(timestampSuffix, '')
-        .trim();
-      if (cleaned) {
-        transcript += cleaned + ' ';
-      }
+    const raw = segment.textContent?.trim();
+    if (!raw) continue;
+    const cleaned = cleanTimestamp(raw);
+    if (cleaned) {
+      transcript += cleaned + ' ';
     }
   }
 
