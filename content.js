@@ -180,18 +180,12 @@ async function fetchTranscript() {
   await new Promise(r => setTimeout(r, 1000));
   const segments = await waitForSegments(panel, 8000);
 
-  console.log("[Transcript Copier] Found", segments.length, "segments");
+  console.log("[Transcript Copier] v4 - Found", segments.length, "segments");
 
-  // Regex to strip timestamp patterns
-  const timestampSuffix = /\s*\d+\s+(minutes?|seconds?)(,\s*\d+\s+(minutes?|seconds?))*\s*$/i;
-  const timestampPrefix = /^\s*\d+:\d{2}\s*/;
-
-  function cleanTimestamp(text) {
-    if (!text) return '';
-    return text
-      .replace(timestampPrefix, '')
-      .replace(timestampSuffix, '')
-      .trim();
+  // Debug: log raw text of first 3 segments with char codes
+  for (let i = 0; i < Math.min(3, segments.length); i++) {
+    const raw = segments[i].textContent;
+    console.log("[Transcript Copier] Segment", i, "raw:", JSON.stringify(raw));
   }
 
   // Extract text from each segment
@@ -199,11 +193,20 @@ async function fetchTranscript() {
   for (const segment of segments) {
     const raw = segment.textContent?.trim();
     if (!raw) continue;
-    const cleaned = cleanTimestamp(raw);
-    if (cleaned) {
-      transcript += cleaned + ' ';
-    }
+    transcript += raw + '\n';
   }
+
+  // Post-process: strip timestamp patterns from the full transcript
+  // Patterns: "37 seconds", "1 minute, 16 seconds", "2 minutes, 1 second"
+  transcript = transcript.replace(/\d+\s+minutes?,\s*\d+\s+seconds?\s*\n/gi, '\n');
+  transcript = transcript.replace(/\d+\s+seconds?\s*\n/gi, '\n');
+  transcript = transcript.replace(/\d+\s+minutes?\s*\n/gi, '\n');
+  // Also handle if timestamps are at the end of a line without newline
+  transcript = transcript.replace(/\d+\s+minutes?,\s*\d+\s+seconds?\s*$/gim, '');
+  transcript = transcript.replace(/\d+\s+seconds?\s*$/gim, '');
+  transcript = transcript.replace(/\d+\s+minutes?\s*$/gim, '');
+  // Clean up: join lines into single text
+  transcript = transcript.split('\n').map(l => l.trim()).filter(l => l).join(' ');
 
   if (!transcript.trim()) {
     throw new Error("Transcript was empty after scraping segments.");
