@@ -161,15 +161,56 @@ async function getCaptionTracks(videoId) {
 // Step 2: Fetch the actual caption text from a track URL
 async function fetchCaptionTrack(baseUrl) {
   // Append fmt=json3 to get JSON format
-  const url = baseUrl + '&fmt=json3';
+  const separator = baseUrl.includes('?') ? '&' : '?';
+  const url = baseUrl + separator + 'fmt=json3';
+
+  console.log("[Transcript Copier] Fetching caption track:", url.substring(0, 100) + "...");
 
   const response = await fetch(url);
   if (!response.ok) {
     throw new Error(`Caption track returned HTTP ${response.status}`);
   }
 
-  const data = await response.json();
-  return parseCaptionEvents(data.events);
+  const text = await response.text();
+  if (!text || text.length === 0) {
+    throw new Error("Caption track response was empty.");
+  }
+
+  // Try JSON first
+  try {
+    const data = JSON.parse(text);
+    return parseCaptionEvents(data.events);
+  } catch (jsonError) {
+    // Fallback: parse as XML (default timedtext format)
+    console.log("[Transcript Copier] JSON parse failed, trying XML parse...");
+    return parseCaptionXml(text);
+  }
+}
+
+function parseCaptionXml(xmlText) {
+  const parser = new DOMParser();
+  const doc = parser.parseFromString(xmlText, 'text/xml');
+  const textElements = doc.querySelectorAll('text');
+
+  if (!textElements || textElements.length === 0) {
+    throw new Error("No caption text found in response.");
+  }
+
+  let transcript = '';
+  for (const el of textElements) {
+    const content = el.textContent.trim();
+    if (content) {
+      // Decode HTML entities and clean up
+      const decoded = content.replace(/&amp;/g, '&').replace(/&lt;/g, '<').replace(/&gt;/g, '>').replace(/&#39;/g, "'").replace(/&quot;/g, '"');
+      transcript += decoded.replace(/\n/g, ' ').trim() + ' ';
+    }
+  }
+
+  if (!transcript.trim()) {
+    throw new Error("Caption track was empty.");
+  }
+
+  return transcript.trim();
 }
 
 function parseCaptionEvents(events) {
