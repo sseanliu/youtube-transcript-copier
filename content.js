@@ -79,185 +79,121 @@ function getVideoId() {
   return url.searchParams.get('v');
 }
 
-// Extract a JSON object starting at a given index using brace counting
-function extractJsonObject(text, startIndex) {
-  let depth = 0;
-  let inString = false;
-  let escape = false;
-  for (let i = startIndex; i < text.length; i++) {
-    const ch = text[i];
-    if (escape) { escape = false; continue; }
-    if (ch === '\\' && inString) { escape = true; continue; }
-    if (ch === '"') { inString = !inString; continue; }
-    if (inString) continue;
-    if (ch === '{') depth++;
-    else if (ch === '}') {
-      depth--;
-      if (depth === 0) return text.substring(startIndex, i + 1);
-    }
-  }
-  return null;
+// Build protobuf params for get_transcript API
+function buildTranscriptParams(videoId) {
+  const encoder = new TextEncoder();
+  const videoIdBytes = encoder.encode(videoId);
+
+  // Protobuf: outer field 1 (message) containing inner field 1 (string) = videoId
+  // Inner: 0x0A <videoId.length> <videoId bytes>
+  // Outer: 0x0A <inner.length> <inner bytes>
+  const innerLen = 1 + 1 + videoIdBytes.length;
+  const bytes = new Uint8Array([
+    0x0A, innerLen,
+    0x0A, videoIdBytes.length,
+    ...videoIdBytes
+  ]);
+
+  return btoa(String.fromCharCode(...bytes));
 }
 
-function parsePlayerResponseFromText(text) {
-  const marker = 'ytInitialPlayerResponse';
-  const idx = text.indexOf(marker);
-  if (idx === -1) return null;
-
-  // Find the opening brace after the marker
-  const braceIdx = text.indexOf('{', idx + marker.length);
-  if (braceIdx === -1) return null;
-
-  const jsonStr = extractJsonObject(text, braceIdx);
-  if (!jsonStr) return null;
-
-  try {
-    return JSON.parse(jsonStr);
-  } catch (e) {
-    console.warn("[Transcript Copier] Failed to parse ytInitialPlayerResponse JSON:", e);
-    return null;
-  }
-}
-
-// Step 1: Get caption track URLs from the page's embedded ytInitialPlayerResponse
-async function getCaptionTracks(videoId) {
-  // Try to extract from page HTML script tags
-  const scripts = document.querySelectorAll('script');
-  for (const script of scripts) {
-    const text = script.textContent;
-    if (!text || !text.includes('ytInitialPlayerResponse')) continue;
-
-    const playerResponse = parsePlayerResponseFromText(text);
-    if (playerResponse) {
-      const tracks = playerResponse.captions?.playerCaptionsTracklistRenderer?.captionTracks;
-      if (tracks && tracks.length > 0) {
-        console.log("[Transcript Copier] Found caption tracks from ytInitialPlayerResponse");
-        return tracks;
-      }
-    }
-  }
-
-  // Fallback: fetch the watch page HTML and parse from there
-  console.log("[Transcript Copier] ytInitialPlayerResponse not found in DOM, fetching page...");
-  const response = await fetch(`https://www.youtube.com/watch?v=${videoId}`, {
-    credentials: 'include',
-  });
-  if (!response.ok) {
-    throw new Error(`Failed to fetch video page: HTTP ${response.status}`);
-  }
-  const html = await response.text();
-  const playerResponse = parsePlayerResponseFromText(html);
-  if (playerResponse) {
-    const tracks = playerResponse.captions?.playerCaptionsTracklistRenderer?.captionTracks;
-    if (tracks && tracks.length > 0) {
-      console.log("[Transcript Copier] Found caption tracks from fetched page HTML");
-      return tracks;
-    }
-  }
-
-  throw new Error("This video does not have captions/transcript available.");
-}
-
-// Step 2: Fetch the actual caption text from a track URL
-async function fetchCaptionTrack(baseUrl) {
-  // Append fmt=json3 to get JSON format
-  const separator = baseUrl.includes('?') ? '&' : '?';
-  const url = baseUrl + separator + 'fmt=json3';
-
-  console.log("[Transcript Copier] Fetching caption track:", url.substring(0, 150) + "...");
-
-  const response = await fetch(url, { credentials: 'include' });
-  console.log("[Transcript Copier] Caption response status:", response.status, "type:", response.type);
-  if (!response.ok) {
-    throw new Error(`Caption track returned HTTP ${response.status}`);
-  }
-
-  const text = await response.text();
-  console.log("[Transcript Copier] Caption response length:", text.length, "first 200 chars:", text.substring(0, 200));
-  if (!text || text.length === 0) {
-    throw new Error("Caption track response was empty.");
-  }
-
-  // Try JSON first
-  try {
-    const data = JSON.parse(text);
-    return parseCaptionEvents(data.events);
-  } catch (jsonError) {
-    // Fallback: parse as XML (default timedtext format)
-    console.log("[Transcript Copier] JSON parse failed, trying XML parse...");
-    return parseCaptionXml(text);
-  }
-}
-
-function parseCaptionXml(xmlText) {
-  const parser = new DOMParser();
-  const doc = parser.parseFromString(xmlText, 'text/xml');
-  const textElements = doc.querySelectorAll('text');
-
-  if (!textElements || textElements.length === 0) {
-    throw new Error("No caption text found in response.");
-  }
-
-  let transcript = '';
-  for (const el of textElements) {
-    const content = el.textContent.trim();
-    if (content) {
-      // Decode HTML entities and clean up
-      const decoded = content.replace(/&amp;/g, '&').replace(/&lt;/g, '<').replace(/&gt;/g, '>').replace(/&#39;/g, "'").replace(/&quot;/g, '"');
-      transcript += decoded.replace(/\n/g, ' ').trim() + ' ';
-    }
-  }
-
-  if (!transcript.trim()) {
-    throw new Error("Caption track was empty.");
-  }
-
-  return transcript.trim();
-}
-
-function parseCaptionEvents(events) {
-  if (!events || events.length === 0) {
-    throw new Error("Caption track has no events.");
-  }
-
-  let transcript = '';
-  for (const event of events) {
-    // Skip events without text segments (timing markers, style events)
-    if (!event.segs) continue;
-
-    const text = event.segs.map(seg => seg.utf8 || '').join('');
-    if (text.trim()) {
-      // Replace newlines within a segment with spaces
-      transcript += text.replace(/\n/g, ' ').trim() + ' ';
-    }
-  }
-
-  if (!transcript.trim()) {
-    throw new Error("Caption track was empty.");
-  }
-
-  return transcript.trim();
-}
-
-// Main: fetch transcript for current video
+// Fetch transcript using YouTube's get_transcript innertube API
 async function fetchTranscript() {
   const videoId = getVideoId();
   if (!videoId) throw new Error("Could not determine video ID.");
 
-  console.log("[Transcript Copier] Fetching captions for video:", videoId);
+  console.log("[Transcript Copier] Fetching transcript for video:", videoId);
 
-  const tracks = await getCaptionTracks(videoId);
+  const params = buildTranscriptParams(videoId);
+  console.log("[Transcript Copier] Params:", params);
 
-  // Prefer English, then any non-auto-generated, then any track
-  let selectedTrack = tracks.find(t => t.languageCode === 'en' && t.kind !== 'asr') ||
-                      tracks.find(t => t.languageCode === 'en') ||
-                      tracks.find(t => t.kind !== 'asr') ||
-                      tracks[0];
+  const response = await fetch('https://www.youtube.com/youtubei/v1/get_transcript', {
+    method: 'POST',
+    headers: { 'Content-Type': 'application/json' },
+    credentials: 'include',
+    body: JSON.stringify({
+      context: {
+        client: {
+          clientName: 'WEB',
+          clientVersion: '2.20260306.01.00',
+        }
+      },
+      params: params,
+    }),
+  });
 
-  console.log("[Transcript Copier] Using track:", selectedTrack.languageCode, selectedTrack.kind || 'manual');
+  console.log("[Transcript Copier] Response status:", response.status);
 
-  const transcript = await fetchCaptionTrack(selectedTrack.baseUrl);
-  return transcript;
+  if (!response.ok) {
+    const errorText = await response.text();
+    console.error("[Transcript Copier] Error response:", errorText.substring(0, 500));
+    throw new Error(`Transcript API returned HTTP ${response.status}`);
+  }
+
+  const data = await response.json();
+  console.log("[Transcript Copier] Response keys:", Object.keys(data));
+
+  // Extract transcript segments from the response
+  const actions = data.actions;
+  if (!actions || actions.length === 0) {
+    throw new Error("No transcript data in response.");
+  }
+
+  // Navigate the response structure to find cue groups
+  let cueGroups = null;
+  for (const action of actions) {
+    const panel = action.updateEngagementPanelAction?.content?.transcriptRenderer;
+    if (panel) {
+      cueGroups = panel.body?.transcriptBodyRenderer?.cueGroups;
+      break;
+    }
+  }
+
+  if (!cueGroups || cueGroups.length === 0) {
+    // Try alternative response structure
+    for (const action of actions) {
+      const searchPanel = action.updateEngagementPanelAction?.content?.transcriptSearchPanelRenderer;
+      if (searchPanel) {
+        cueGroups = searchPanel.body?.transcriptSegmentListRenderer?.initialSegments;
+        break;
+      }
+    }
+  }
+
+  if (!cueGroups || cueGroups.length === 0) {
+    console.log("[Transcript Copier] Full response:", JSON.stringify(data).substring(0, 2000));
+    throw new Error("Could not find transcript segments in response.");
+  }
+
+  // Extract text from cue groups
+  let transcript = '';
+  for (const group of cueGroups) {
+    const cues = group.transcriptCueGroupRenderer?.cues;
+    if (cues) {
+      for (const cue of cues) {
+        const text = cue.transcriptCueRenderer?.cue?.simpleText;
+        if (text && text.trim()) {
+          transcript += text.replace(/\n/g, ' ').trim() + ' ';
+        }
+      }
+    } else {
+      // Alternative: transcriptSegmentRenderer
+      const segText = group.transcriptSegmentRenderer?.snippet?.runs;
+      if (segText) {
+        const text = segText.map(r => r.text || '').join('');
+        if (text.trim()) {
+          transcript += text.replace(/\n/g, ' ').trim() + ' ';
+        }
+      }
+    }
+  }
+
+  if (!transcript.trim()) {
+    throw new Error("Transcript was empty.");
+  }
+
+  console.log("[Transcript Copier] Got transcript, length:", transcript.length);
+  return transcript.trim();
 }
 
 const buttonObserver = new MutationObserver(() => {
